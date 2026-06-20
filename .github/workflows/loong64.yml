@@ -20,6 +20,7 @@ jobs:
       PAUSE_TAG: ${{ steps.build-pause.outputs.PAUSE_TAG }}
       PAUSE_VERSION: ${{ steps.build-pause.outputs.PAUSE_VERSION }}
       DOCKER_TAG: ${{ steps.extract.outputs.DOCKER_TAG }}
+      RAW_VERSION: ${{ steps.extract.outputs.RAW_VERSION }}
       SERIAL: ${{ steps.extract.outputs.SERIAL }}
       IS_STABLE: ${{ steps.extract.outputs.IS_STABLE }}
     permissions:
@@ -49,6 +50,7 @@ jobs:
           echo "REF=$REF"
           RAW_VERSION=$(echo $REF | awk -F'loong64-' '{print $2}')
           echo "RAW_VERSION=$RAW_VERSION"
+          echo "RAW_VERSION=$RAW_VERSION" >> ${GITHUB_OUTPUT}
           KUBERNETES_BRANCH=$(echo $RAW_VERSION | awk -F'+' '{print $1}')
           echo "KUBERNETES_BRANCH=$KUBERNETES_BRANCH"
           echo "KUBERNETES_BRANCH=$KUBERNETES_BRANCH" >> ${GITHUB_ENV}
@@ -239,9 +241,206 @@ jobs:
           path: |
             kubernetes/_output/release-images/*/*
 
+  rpm-anolis:
+    needs: build
+    runs-on: ubuntu-latest
+    container: openanolis/anolisos:23.4
+    outputs:
+      KUBECTL_ANOLIS_RPM_NAME: ${{ steps.rpm-file.outputs.KUBECTL_ANOLIS_RPM_NAME }}
+    permissions:
+      contents: read
+    env:
+      RAW_VERSION: ${{ needs.build.outputs.RAW_VERSION }}
+      DOCKER_TAG: ${{ needs.build.outputs.DOCKER_TAG }}
+      SERIAL: ${{ needs.build.outputs.SERIAL }}
+      IS_STABLE: ${{ needs.build.outputs.IS_STABLE }}
+      ARCH: loongarch64
+    steps:
+      - name: Install gzip
+        run: yum install -y gzip
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Extract version
+        id: extract-version
+        run: |
+          VERSION=$(echo $DOCKER_TAG | awk -F'-' '{print $1}' | sed 's/^v//')
+          echo "VERSION=$VERSION"
+          echo "VERSION=$VERSION" >> ${GITHUB_ENV}
+          DIST=$(rpm --eval '%{dist}')
+          echo "DIST=$DIST"
+          echo "DIST=$DIST" >> ${GITHUB_ENV}
+          ANOLIS_VERSION=$(cat /etc/anolis-release | awk '{print $4}' | cut -d'.' -f1)
+          echo "ANOLIS_VERSION=$ANOLIS_VERSION"
+          echo "ANOLIS_VERSION=$ANOLIS_VERSION" >> ${GITHUB_ENV}
+      - name: Install build tools
+        run: yum install -y rpm-build rpmdevtools
+      - name: Download binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kubernetes-loong64-binaries
+          path: artifacts
+      - name: Build RPM
+        id: rpm-file
+        run: |
+          rm -rf ~/rpmbuild
+          rpmdev-setuptree
+          find ~/rpmbuild
+          KUBE_ARCH="${{ env.ARCH }}"
+          # %setup -q -c creates BUILD/kubectl-${VERSION}/ as the working directory
+          BUILD_DIR=~/rpmbuild/BUILD/kubectl-$VERSION
+          mkdir -p ${BUILD_DIR}/${KUBE_ARCH}
+          # Find kubectl binary from artifacts
+          find artifacts -type f -name kubectl -exec cp -t ${BUILD_DIR}/${KUBE_ARCH} {} \;
+          cp templates/latest/kubectl/LICENSE ${BUILD_DIR}/
+          cp templates/latest/kubectl/README.md ${BUILD_DIR}/
+          cp templates/latest/kubectl/kubectl.spec ~/rpmbuild/SPECS/
+          rpmbuild -ba --target ${{ env.ARCH }} ~/rpmbuild/SPECS/kubectl.spec \
+            --define "version ${{ env.VERSION }}" \
+            --define "release ${{ env.SERIAL }}"
+          mkdir -p rpms
+          find ~/rpmbuild/RPMS -name '*.rpm'
+          find ~/rpmbuild/RPMS -name '*.rpm' -exec cp -t rpms {} +
+          KUBECTL_ANOLIS_RPM_NAME=kubectl-${{ env.VERSION }}-${{ env.SERIAL }}${{ env.DIST }}.${{ env.ARCH }}.rpm
+          echo "KUBECTL_ANOLIS_RPM_NAME=$KUBECTL_ANOLIS_RPM_NAME"
+          echo "KUBECTL_ANOLIS_RPM_NAME=$KUBECTL_ANOLIS_RPM_NAME" >> $GITHUB_OUTPUT
+          echo "KUBECTL_ANOLIS_RPM_NAME=$KUBECTL_ANOLIS_RPM_NAME" >> $GITHUB_ENV
+          echo "=== RPM file name: $KUBECTL_ANOLIS_RPM_NAME ==="
+          sha256sum rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== RPM info ==="
+          rpm -qpi rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== RPM contents ==="
+          rpm2cpio rpms/$KUBECTL_ANOLIS_RPM_NAME | cpio -it
+      - name: Import GPG key
+        run: |
+          export LANG=C.UTF-8
+          echo "${{ secrets.GPG_PRIVATE_KEY_BASE64 }}" | base64 -d | gpg --batch --import > /dev/null
+          echo "$(gpg --list-secret-keys --keyid-format LONG | grep -Eo '[A-F0-9]{40}' | head -1):6:" | gpg --import-ownertrust
+          GPG_KEY_ID=$(gpg --list-secret-keys --with-colons | grep '^sec:' | head -1 | cut -d: -f5)
+          echo "GPG_KEY_ID=$GPG_KEY_ID"
+          echo "GPG_KEY_ID=$GPG_KEY_ID" >> $GITHUB_ENV
+      - name: Configure rpmmacros
+        run: |
+          cat > ~/.rpmmacros << EOF
+          %_signature gpg
+          %_gpg_path ~/.gnupg
+          %_gpg_name ${{ env.GPG_KEY_ID }}
+          %_gpgbin /usr/bin/gpg2
+          %__gpg_sign_cmd %{__gpg} gpg --force-v3-sigs --digest-algo sha256 --batch --no-verbose --no-armor --no-secmem-warning -u "%{_gpg_name}" -sbo %{__signature_filename} %{__plaintext_filename}
+          EOF
+          gpg --armor --export "${GPG_KEY_ID}" > /tmp/gpg-pubkey.asc
+          rpm --import /tmp/gpg-pubkey.asc
+      - name: Sign RPM
+        run: |
+          echo "=== Signing RPM with GPG key: $GPG_KEY_ID ==="
+          rpm --addsign rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== Verifying RPM signature ==="
+          rpm --checksig rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== RPM file name: $KUBECTL_ANOLIS_RPM_NAME ==="
+          sha256sum rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== RPM info ==="
+          rpm -qpi rpms/$KUBECTL_ANOLIS_RPM_NAME
+          echo "=== RPM contents ==="
+          rpm2cpio rpms/$KUBECTL_ANOLIS_RPM_NAME | cpio -it
+      - name: Upload RPM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kubernetes-loong64-kubectl-rpm
+          path: |
+            rpms/${{ env.KUBECTL_ANOLIS_RPM_NAME }}
+
+  deb-debian:
+    needs: build
+    runs-on: ubuntu-latest
+    container: debian:13
+    outputs:
+      KUBECTL_DEBIAN_DEB_NAME: ${{ steps.deb-file.outputs.KUBECTL_DEBIAN_DEB_NAME }}
+    permissions:
+      contents: read
+    env:
+      RAW_VERSION: ${{ needs.build.outputs.RAW_VERSION }}
+      DOCKER_TAG: ${{ needs.build.outputs.DOCKER_TAG }}
+      SERIAL: ${{ needs.build.outputs.SERIAL }}
+      IS_STABLE: ${{ needs.build.outputs.IS_STABLE }}
+      ARCH: loong64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install build tools
+        run: |
+          apt update
+          apt install -y file
+      - name: Extract version
+        id: extract-version
+        run: |
+          VERSION=$(echo $DOCKER_TAG | awk -F'-' '{print $1}' | sed 's/^v//')
+          echo "VERSION=$VERSION"
+          echo "VERSION=$VERSION" >> ${GITHUB_ENV}
+          ID_VERSION_ID=$(sh -c '. /etc/os-release && echo "${ID}.${VERSION_ID}"')
+          echo "ID_VERSION_ID=$ID_VERSION_ID"
+          echo "ID_VERSION_ID=$ID_VERSION_ID" >> ${GITHUB_ENV}
+          DEBIAN_VERSION_CODENAME=$(sh -c '. /etc/os-release && echo "${VERSION_CODENAME}"')
+          echo "DEBIAN_VERSION_CODENAME=$DEBIAN_VERSION_CODENAME"
+          echo "DEBIAN_VERSION_CODENAME=$DEBIAN_VERSION_CODENAME" >> ${GITHUB_ENV}
+      - name: Download binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kubernetes-loong64-binaries
+          path: artifacts
+      - name: Build DEB
+        id: deb-file
+        run: |
+          PKG_ROOT=$(mktemp -d)
+          mkdir -p $PKG_ROOT/usr/bin
+          mkdir -p $PKG_ROOT/usr/share/doc/kubectl
+          mkdir -p $PKG_ROOT/DEBIAN
+
+          find artifacts -type f -name kubectl -exec install -m 755 {} $PKG_ROOT/usr/bin/kubectl \;
+          install -m 644 templates/latest/kubectl/LICENSE $PKG_ROOT/usr/share/doc/kubectl/copyright
+
+          cat > $PKG_ROOT/DEBIAN/control << EOF
+          Package: kubectl
+          Version: ${{ env.VERSION }}-${{ env.SERIAL }}~${{ env.ID_VERSION_ID }}~${{ env.DEBIAN_VERSION_CODENAME }}
+          Architecture: ${{ env.ARCH }}
+          Maintainer: 徐晓伟 <xuxiaowei@xuxiaowei.com.cn>
+          Description: kubectl (loong64)
+           kubectl — Command-line utility for interacting with a Kubernetes cluster,
+           built for the loong64 (LoongArch) architecture.
+          Homepage: https://github.com/kubernetes-loong64/kubernetes-loong64
+          Section: admin
+          Priority: optional
+          EOF
+
+          mkdir -p debs
+          dpkg-deb --build $PKG_ROOT debs/
+
+          find debs -name '*.deb'
+          for f in debs/*.deb; do
+            new_name=$(echo "$f" | tr '~' '.')
+            if [ "$f" != "$new_name" ]; then
+              mv "$f" "$new_name"
+              echo "Renamed: $f -> $new_name"
+            fi
+          done
+          KUBECTL_DEBIAN_DEB_NAME=kubectl_${{ env.VERSION }}-${{ env.SERIAL }}.${{ env.ID_VERSION_ID }}.${{ env.DEBIAN_VERSION_CODENAME }}_${{ env.ARCH }}.deb
+          echo "KUBECTL_DEBIAN_DEB_NAME=$KUBECTL_DEBIAN_DEB_NAME"
+          echo "KUBECTL_DEBIAN_DEB_NAME=$KUBECTL_DEBIAN_DEB_NAME" >> $GITHUB_OUTPUT
+          echo "KUBECTL_DEBIAN_DEB_NAME=$KUBECTL_DEBIAN_DEB_NAME" >> $GITHUB_ENV
+          echo "=== DEB file name: $KUBECTL_DEBIAN_DEB_NAME ==="
+          sha256sum debs/$KUBECTL_DEBIAN_DEB_NAME
+          echo "=== DEB info ==="
+          dpkg --info debs/$KUBECTL_DEBIAN_DEB_NAME
+          echo "=== DEB contents ==="
+          dpkg --contents debs/$KUBECTL_DEBIAN_DEB_NAME
+      - name: Upload DEB
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kubernetes-loong64-kubectl-deb
+          path: |
+            debs/${{ env.KUBECTL_DEBIAN_DEB_NAME }}
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [ build, rpm-anolis, deb-debian ]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -252,6 +451,8 @@ jobs:
       PAUSE_VERSION: ${{ needs.build.outputs.PAUSE_VERSION }}
       SERIAL: ${{ needs.build.outputs.SERIAL }}
       IS_STABLE: ${{ needs.build.outputs.IS_STABLE }}
+      KUBECTL_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBECTL_ANOLIS_RPM_NAME }}
+      KUBECTL_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBECTL_DEBIAN_DEB_NAME }}
     steps:
       - name: Download binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -267,6 +468,16 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: kubernetes-loong64-pause
+          path: loong64-artifacts
+      - name: Download kubectl RPM
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kubernetes-loong64-kubectl-rpm
+          path: loong64-artifacts
+      - name: Download kubectl DEB
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: kubernetes-loong64-kubectl-deb
           path: loong64-artifacts
       - name: List downloaded files
         run: find . -type f
@@ -319,32 +530,34 @@ jobs:
         run: |
           cat > release-body.md <<'BODYEOF'
           ## Artifacts
-
-          | File                          | Download                                                                       |
-          |-------------------------------|--------------------------------------------------------------------------------|
-          | `apiextensions-apiserver`     | [apiextensions-apiserver](${{ env.BASE_URL }}/apiextensions-apiserver)         |
-          | `conformance-loong64.tar`     | [conformance-loong64.tar](${{ env.BASE_URL }}/conformance-loong64.tar)         |
-          | `ginkgo`                      | [ginkgo](${{ env.BASE_URL }}/ginkgo)                                           |
-          | `go-runner`                   | [go-runner](${{ env.BASE_URL }}/go-runner)                                     |
-          | `kubeadm`                     | [kubeadm](${{ env.BASE_URL }}/kubeadm)                                         |
-          | `kube-aggregator`             | [kube-aggregator](${{ env.BASE_URL }}/kube-aggregator)                         |
-          | `kube-apiserver.tar`          | [kube-apiserver.tar](${{ env.BASE_URL }}/kube-apiserver.tar)                   |
-          | `kube-apiserver`              | [kube-apiserver](${{ env.BASE_URL }}/kube-apiserver)                           |
-          | `kube-controller-manager.tar` | [kube-controller-manager.tar](${{ env.BASE_URL }}/kube-controller-manager.tar) |
-          | `kube-controller-manager`     | [kube-controller-manager](${{ env.BASE_URL }}/kube-controller-manager)         |
-          | `kubectl.tar`                 | [kubectl.tar](${{ env.BASE_URL }}/kubectl.tar)                                 |
-          | `kubectl`                     | [kubectl](${{ env.BASE_URL }}/kubectl)                                         |
-          | `kubectl-convert`             | [kubectl-convert](${{ env.BASE_URL }}/kubectl-convert)                         |
-          | `kubelet`                     | [kubelet](${{ env.BASE_URL }}/kubelet)                                         |
-          | `kube-log-runner`             | [kube-log-runner](${{ env.BASE_URL }}/kube-log-runner)                         |
-          | `kubemark`                    | [kubemark](${{ env.BASE_URL }}/kubemark)                                       |
-          | `kube-proxy.tar`              | [kube-proxy.tar](${{ env.BASE_URL }}/kube-proxy.tar)                           |
-          | `kube-proxy`                  | [kube-proxy](${{ env.BASE_URL }}/kube-proxy)                                   |
-          | `kube-scheduler.tar`          | [kube-scheduler.tar](${{ env.BASE_URL }}/kube-scheduler.tar)                   |
-          | `kube-scheduler`              | [kube-scheduler](${{ env.BASE_URL }}/kube-scheduler)                           |
-          | `mounter`                     | [mounter](${{ env.BASE_URL }}/mounter)                                         |
-          | `pause-loong64.tar`           | [pause-loong64.tar](${{ env.BASE_URL }}/pause-loong64.tar)                     |
           
+          | File                                 | Download                                                                                     |
+          |--------------------------------------|----------------------------------------------------------------------------------------------|
+          | `apiextensions-apiserver`            | [apiextensions-apiserver](${{ env.BASE_URL }}/apiextensions-apiserver)                       |
+          | `conformance-loong64.tar`            | [conformance-loong64.tar](${{ env.BASE_URL }}/conformance-loong64.tar)                       |
+          | `ginkgo`                             | [ginkgo](${{ env.BASE_URL }}/ginkgo)                                                         |
+          | `go-runner`                          | [go-runner](${{ env.BASE_URL }}/go-runner)                                                   |
+          | `kubeadm`                            | [kubeadm](${{ env.BASE_URL }}/kubeadm)                                                       |
+          | `kube-aggregator`                    | [kube-aggregator](${{ env.BASE_URL }}/kube-aggregator)                                       |
+          | `kube-apiserver.tar`                 | [kube-apiserver.tar](${{ env.BASE_URL }}/kube-apiserver.tar)                                 |
+          | `kube-apiserver`                     | [kube-apiserver](${{ env.BASE_URL }}/kube-apiserver)                                         |
+          | `kube-controller-manager.tar`        | [kube-controller-manager.tar](${{ env.BASE_URL }}/kube-controller-manager.tar)               |
+          | `kube-controller-manager`            | [kube-controller-manager](${{ env.BASE_URL }}/kube-controller-manager)                       |
+          | `kubectl.tar`                        | [kubectl.tar](${{ env.BASE_URL }}/kubectl.tar)                                               |
+          | `kubectl`                            | [kubectl](${{ env.BASE_URL }}/kubectl)                                                       |
+          | `kubectl-convert`                    | [kubectl-convert](${{ env.BASE_URL }}/kubectl-convert)                                       |
+          | `kubelet`                            | [kubelet](${{ env.BASE_URL }}/kubelet)                                                       |
+          | `kube-log-runner`                    | [kube-log-runner](${{ env.BASE_URL }}/kube-log-runner)                                       |
+          | `kubemark`                           | [kubemark](${{ env.BASE_URL }}/kubemark)                                                     |
+          | `kube-proxy.tar`                     | [kube-proxy.tar](${{ env.BASE_URL }}/kube-proxy.tar)                                         |
+          | `kube-proxy`                         | [kube-proxy](${{ env.BASE_URL }}/kube-proxy)                                                 |
+          | `kube-scheduler.tar`                 | [kube-scheduler.tar](${{ env.BASE_URL }}/kube-scheduler.tar)                                 |
+          | `kube-scheduler`                     | [kube-scheduler](${{ env.BASE_URL }}/kube-scheduler)                                         |
+          | `mounter`                            | [mounter](${{ env.BASE_URL }}/mounter)                                                       |
+          | `pause-loong64.tar`                  | [pause-loong64.tar](${{ env.BASE_URL }}/pause-loong64.tar)                                   |
+          | `${{ env.KUBECTL_ANOLIS_RPM_NAME }}` | [${{ env.KUBECTL_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_ANOLIS_RPM_NAME }}) |
+          | `${{ env.KUBECTL_DEBIAN_DEB_NAME }}` | [${{ env.KUBECTL_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }}) |
+
           Each file has a corresponding `.asc` detached GPG signature.
 
           ```shell
@@ -425,7 +638,15 @@ jobs:
           curl -LO ${{ env.BASE_URL }}/kube-proxy.tar.asc
           curl -LO ${{ env.BASE_URL }}/kube-scheduler.tar
           curl -LO ${{ env.BASE_URL }}/kube-scheduler.tar.asc
-          
+
+          # kubectl RPM (Anolis)
+          curl -LO ${{ env.BASE_URL }}/${{ env.KUBECTL_ANOLIS_RPM_NAME }}
+          curl -LO ${{ env.BASE_URL }}/${{ env.KUBECTL_ANOLIS_RPM_NAME }}.asc
+
+          # kubectl DEB (Debian)
+          curl -LO ${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }}
+          curl -LO ${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }}.asc
+
           ctr -n k8s.io i ls -q | grep '^sha256'
           
           ctr -n k8s.io i import pause-loong64.tar
