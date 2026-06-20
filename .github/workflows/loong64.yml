@@ -61,6 +61,7 @@ jobs:
           echo "DOCKER_TAG=$DOCKER_TAG" >> ${GITHUB_ENV}
           echo "DOCKER_TAG=$DOCKER_TAG" >> ${GITHUB_OUTPUT}
           SERIAL=$(echo $RAW_VERSION | awk -F'+' '{print $2}')
+          SERIAL=${SERIAL:-alpha.${{ github.run_number }}}
           echo "SERIAL=$SERIAL"
           echo "SERIAL=$SERIAL" >> ${GITHUB_ENV}
           echo "SERIAL=$SERIAL" >> ${GITHUB_OUTPUT}
