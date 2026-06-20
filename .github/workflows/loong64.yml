@@ -301,7 +301,8 @@ jobs:
           cp templates/latest/kubectl/kubectl.spec ~/rpmbuild/SPECS/
           rpmbuild -ba --target ${{ env.ARCH }} ~/rpmbuild/SPECS/kubectl.spec \
             --define "version ${{ env.VERSION }}" \
-            --define "release ${{ env.SERIAL }}"
+            --define "release ${{ env.SERIAL }}" \
+            --define "kube_arch ${{ env.ARCH }}"
           mkdir -p rpms
           find ~/rpmbuild/RPMS -name '*.rpm'
           find ~/rpmbuild/RPMS -name '*.rpm' -exec cp -t rpms {} +

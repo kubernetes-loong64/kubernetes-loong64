@@ -31,7 +31,8 @@ BugURL: https://github.com/kubernetes-loong64/kubernetes-loong64/issues
 
 %install
 # Detect host arch
-KUBE_ARCH="$(uname -m)"
+#KUBE_ARCH="$(uname -m)"
+KUBE_ARCH="%{kube_arch}"
 
 # Install binaries
 mkdir -p %{buildroot}%{_bindir}
