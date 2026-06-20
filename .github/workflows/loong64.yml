@@ -18,6 +18,7 @@ jobs:
     container: debian:13
     outputs:
       PAUSE_TAG: ${{ steps.build-pause.outputs.PAUSE_TAG }}
+      PAUSE_VERSION: ${{ steps.build-pause.outputs.PAUSE_VERSION }}
       DOCKER_TAG: ${{ steps.extract.outputs.DOCKER_TAG }}
       SERIAL: ${{ steps.extract.outputs.SERIAL }}
       IS_STABLE: ${{ steps.extract.outputs.IS_STABLE }}
@@ -129,6 +130,9 @@ jobs:
           PAUSE_TAG=$(docker images registry.k8s.io/pause --format "{{.Tag}}")
           echo "PAUSE_TAG=$PAUSE_TAG"
           echo "PAUSE_TAG=$PAUSE_TAG" >> $GITHUB_OUTPUT
+          PAUSE_VERSION=$(echo $PAUSE_TAG | sed 's/-linux-loong64//')
+          echo "PAUSE_VERSION=$PAUSE_VERSION"
+          echo "PAUSE_VERSION=$PAUSE_VERSION" >> $GITHUB_OUTPUT
           IMAGE_REF=$(docker images registry.k8s.io/pause --format "{{.Repository}}:{{.Tag}}")
           echo "=== Saving $IMAGE_REF ==="
           docker save -o pause-loong64.tar $IMAGE_REF
@@ -244,6 +248,8 @@ jobs:
     env:
       BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
       DOCKER_TAG: ${{ needs.build.outputs.DOCKER_TAG }}
+      PAUSE_TAG: ${{ needs.build.outputs.PAUSE_TAG }}
+      PAUSE_VERSION: ${{ needs.build.outputs.PAUSE_VERSION }}
       SERIAL: ${{ needs.build.outputs.SERIAL }}
       IS_STABLE: ${{ needs.build.outputs.IS_STABLE }}
     steps:
@@ -419,13 +425,26 @@ jobs:
           curl -LO ${{ env.BASE_URL }}/kube-proxy.tar.asc
           curl -LO ${{ env.BASE_URL }}/kube-scheduler.tar
           curl -LO ${{ env.BASE_URL }}/kube-scheduler.tar.asc
-          docker load -i pause-loong64.tar
-          docker load -i conformance-loong64.tar
-          docker load -i kube-apiserver.tar
-          docker load -i kube-controller-manager.tar
-          docker load -i kubectl.tar
-          docker load -i kube-proxy.tar
-          docker load -i kube-scheduler.tar
+          
+          ctr -n k8s.io i ls -q | grep '^sha256'
+          
+          ctr -n k8s.io i import pause-loong64.tar
+          ctr -n k8s.io i import conformance-loong64.tar
+          ctr -n k8s.io i import kube-apiserver.tar
+          ctr -n k8s.io i import kube-controller-manager.tar
+          ctr -n k8s.io i import kubectl.tar
+          ctr -n k8s.io i import kube-proxy.tar
+          ctr -n k8s.io i import kube-scheduler.tar
+          
+          ctr -n k8s.io i ls -q | grep '^sha256'
+          ctr -n k8s.io i tag registry.k8s.io/pause:${{ env.PAUSE_TAG }} registry.k8s.io/pause:${{ env.PAUSE_VERSION }}
+          ctr -n k8s.io i tag registry.k8s.io/conformance-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/conformance:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i tag registry.k8s.io/kube-apiserver-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/kube-apiserver:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i tag registry.k8s.io/kube-controller-manager-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/kube-controller-manager:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i tag registry.k8s.io/kubectl-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/kubectl:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i tag registry.k8s.io/kube-proxy-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/kube-proxy:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i tag registry.k8s.io/kube-scheduler-loong64:${{ env.DOCKER_TAG }} registry.k8s.io/kube-scheduler:${{ env.DOCKER_TAG }}
+          ctr -n k8s.io i ls -q | grep '^sha256'
           ```
 
           ## Verifying releases
