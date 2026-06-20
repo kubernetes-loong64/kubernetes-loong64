@@ -291,8 +291,8 @@ jobs:
           rpmdev-setuptree
           find ~/rpmbuild
           KUBE_ARCH="${{ env.ARCH }}"
-          # %setup -q -c creates BUILD/kubectl-${VERSION}/ as the working directory
-          BUILD_DIR=~/rpmbuild/BUILD/kubectl-$VERSION
+          # Place files directly in BUILD (no source tarball, %prep is a no-op)
+          BUILD_DIR=~/rpmbuild/BUILD
           mkdir -p ${BUILD_DIR}/${KUBE_ARCH}
           # Find kubectl binary from artifacts
           find artifacts -type f -name kubectl -exec cp -t ${BUILD_DIR}/${KUBE_ARCH} {} \;
