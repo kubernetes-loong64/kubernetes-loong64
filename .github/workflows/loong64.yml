@@ -278,7 +278,7 @@ jobs:
           echo "ANOLIS_VERSION=$ANOLIS_VERSION" >> ${GITHUB_ENV}
           echo "ANOLIS_VERSION=$ANOLIS_VERSION" >> ${GITHUB_OUTPUT}
       - name: Install build tools
-        run: yum install -y rpm-build rpmdevtools
+        run: yum install -y rpm-build rpmdevtools rpm-sign
       - name: Download binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
