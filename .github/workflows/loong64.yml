@@ -283,7 +283,7 @@ jobs:
         with:
           name: kubernetes-loong64-binaries
           path: artifacts
-      - name: Build RPM
+      - name: Build kubectl RPM
         id: rpm-file
         run: |
           rm -rf ~/rpmbuild
@@ -333,7 +333,7 @@ jobs:
           EOF
           gpg --armor --export "${GPG_KEY_ID}" > /tmp/gpg-pubkey.asc
           rpm --import /tmp/gpg-pubkey.asc
-      - name: Sign RPM
+      - name: Sign kubectl RPM
         run: |
           echo "=== Signing RPM with GPG key: $GPG_KEY_ID ==="
           rpm --addsign rpms/$KUBECTL_ANOLIS_RPM_NAME
@@ -345,7 +345,7 @@ jobs:
           rpm -qpi rpms/$KUBECTL_ANOLIS_RPM_NAME
           echo "=== RPM contents ==="
           rpm2cpio rpms/$KUBECTL_ANOLIS_RPM_NAME | cpio -it
-      - name: Upload RPM
+      - name: Upload kubectl RPM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kubernetes-loong64-kubectl-rpm
@@ -392,7 +392,7 @@ jobs:
         with:
           name: kubernetes-loong64-binaries
           path: artifacts
-      - name: Build DEB
+      - name: Build kubectl DEB
         id: deb-file
         run: |
           PKG_ROOT=$(mktemp -d)
@@ -437,7 +437,7 @@ jobs:
           dpkg --info debs/$KUBECTL_DEBIAN_DEB_NAME
           echo "=== DEB contents ==="
           dpkg --contents debs/$KUBECTL_DEBIAN_DEB_NAME
-      - name: Upload DEB
+      - name: Upload kubectl DEB
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kubernetes-loong64-kubectl-deb
