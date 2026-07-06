@@ -17,8 +17,7 @@ License: Apache-2.0
 #URL: https://kubernetes.io
 URL: https://github.com/kubernetes-loong64/kubernetes-loong64
 BugURL: https://github.com/kubernetes-loong64/kubernetes-loong64/issues
-# Source0: %{name}_%{version}.orig.tar.gz
-Source1: %{name}.rpmlintrc
+# Source0: name_version.orig.tar.gz
 
 BuildRequires: systemd
 Requires: iptables >= 1.4.21
