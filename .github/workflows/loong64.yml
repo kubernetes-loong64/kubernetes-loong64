@@ -252,8 +252,6 @@ jobs:
       KUBECTL_ANOLIS_RPM_NAME: ${{ steps.build-rpms.outputs.KUBECTL_ANOLIS_RPM_NAME }}
       KUBEADM_ANOLIS_RPM_NAME: ${{ steps.build-rpms.outputs.KUBEADM_ANOLIS_RPM_NAME }}
       KUBELET_ANOLIS_RPM_NAME: ${{ steps.build-rpms.outputs.KUBELET_ANOLIS_RPM_NAME }}
-      CRI_TOOLS_ANOLIS_RPM_NAME: ${{ steps.build-rpms.outputs.CRI_TOOLS_ANOLIS_RPM_NAME }}
-      KUBERNETES_CNI_ANOLIS_RPM_NAME: ${{ steps.build-rpms.outputs.KUBERNETES_CNI_ANOLIS_RPM_NAME }}
       ANOLIS_VERSION: ${{ steps.extract-version.outputs.ANOLIS_VERSION }}
     permissions:
       contents: read
@@ -288,45 +286,6 @@ jobs:
         with:
           name: kubernetes-loong64-binaries
           path: artifacts
-      - name: Download external binaries (cri-tools, kubernetes-cni)
-        run: |
-          mkdir -p external-binaries/${{ env.ARCH }}
-
-          # --- cri-tools (crictl) ---
-          # Derive cri-tools minor version from Kubernetes minor version
-          CRI_TOOLS_MINOR=$(echo "${{ env.VERSION }}" | cut -d'.' -f2)
-          CRI_TOOLS_VERSION="1.${CRI_TOOLS_MINOR}.0"
-          echo "Attempting to download crictl v${CRI_TOOLS_VERSION} for ${{ env.ARCH }}..."
-          CRI_TOOLS_URL="https://github.com/kubernetes-loong64/cri-tools-loong64/releases/download/release-loong64-v${CRI_TOOLS_VERSION}/crictl"
-          if curl -fsSL -o external-binaries/${{ env.ARCH }}/crictl "$CRI_TOOLS_URL"; then
-            echo "Downloaded crictl from $CRI_TOOLS_URL"
-          else
-            echo "WARNING: Failed to download crictl from $CRI_TOOLS_URL"
-            echo "cri-tools RPM will be skipped. Create a cri-tools-loong64 release first."
-            touch external-binaries/${{ env.ARCH }}/.skip-cri-tools
-          fi
-          if [ ! -f external-binaries/${{ env.ARCH }}/.skip-cri-tools ]; then
-            chmod 755 external-binaries/${{ env.ARCH }}/crictl
-            file external-binaries/${{ env.ARCH }}/crictl
-          fi
-
-          # --- kubernetes-cni (CNI plugins) ---
-          KUBERNETES_CNI_VERSION="1.6.2"
-          echo "Attempting to download CNI plugins v${KUBERNETES_CNI_VERSION} for ${{ env.ARCH }}..."
-          KUBERNETES_CNI_BASE="https://github.com/kubernetes-loong64/plugins-loong64/releases/download/release-loong64-v${KUBERNETES_CNI_VERSION}"
-          CNI_DOWNLOAD_OK=true
-          for plugin in bandwidth bridge dhcp dummy firewall host-device host-local ipvlan loopback macvlan portmap ptp sbr static tap tuning vlan vrf; do
-            if ! curl -fsSL -o "external-binaries/${{ env.ARCH }}/${plugin}" "${KUBERNETES_CNI_BASE}/${plugin}"; then
-              echo "WARNING: Failed to download ${plugin}. CNI plugins package will be skipped."
-              CNI_DOWNLOAD_OK=false
-              break
-            fi
-            chmod 755 "external-binaries/${{ env.ARCH }}/${plugin}"
-          done
-          if [ "$CNI_DOWNLOAD_OK" = false ]; then
-            touch external-binaries/${{ env.ARCH }}/.skip-kubernetes-cni
-          fi
-          ls -la external-binaries/${{ env.ARCH }}/ 2>/dev/null || echo "No external binaries directory"
       - name: Build all RPMs
         id: build-rpms
         run: |
@@ -389,48 +348,10 @@ jobs:
           rm -rf ${BUILD_DIR}/*
           rm -f ~/rpmbuild/SPECS/kubelet.spec
 
-          # ---- cri-tools ----
-          echo "=== Building cri-tools RPM ==="
-          if [ -f external-binaries/${KUBE_ARCH}/.skip-cri-tools ]; then
-            echo "Skipping cri-tools RPM (no binary available)"
-          else
-            mkdir -p ${BUILD_DIR}/${KUBE_ARCH}
-            cp external-binaries/${KUBE_ARCH}/crictl ${BUILD_DIR}/${KUBE_ARCH}/
-            cp templates/latest/cri-tools/LICENSE ${BUILD_DIR}/
-            cp templates/latest/cri-tools/README.md ${BUILD_DIR}/
-            cp templates/latest/cri-tools/cri-tools.spec ~/rpmbuild/SPECS/
-            rpmbuild -ba --target ${KUBE_ARCH} ~/rpmbuild/SPECS/cri-tools.spec \
-              --define "version ${VERSION}" \
-              --define "release ${SERIAL}" \
-              --define "kube_arch ${KUBE_ARCH}"
-            find ~/rpmbuild/RPMS -name '*.rpm' -exec cp -t rpms {} +
-            rm -rf ${BUILD_DIR}/*
-            rm -f ~/rpmbuild/SPECS/cri-tools.spec
-          fi
-
-          # ---- kubernetes-cni ----
-          echo "=== Building kubernetes-cni RPM ==="
-          if [ -f external-binaries/${KUBE_ARCH}/.skip-kubernetes-cni ]; then
-            echo "Skipping kubernetes-cni RPM (no binaries available)"
-          else
-            mkdir -p ${BUILD_DIR}/${KUBE_ARCH}
-            cp external-binaries/${KUBE_ARCH}/* ${BUILD_DIR}/${KUBE_ARCH}/
-            cp templates/latest/kubernetes-cni/LICENSE ${BUILD_DIR}/
-            cp templates/latest/kubernetes-cni/README.md ${BUILD_DIR}/
-            cp templates/latest/kubernetes-cni/kubernetes-cni.spec ~/rpmbuild/SPECS/
-            rpmbuild -ba --target ${KUBE_ARCH} ~/rpmbuild/SPECS/kubernetes-cni.spec \
-              --define "version ${VERSION}" \
-              --define "release ${SERIAL}" \
-              --define "kube_arch ${KUBE_ARCH}"
-            find ~/rpmbuild/RPMS -name '*.rpm' -exec cp -t rpms {} +
-            rm -rf ${BUILD_DIR}/*
-            rm -f ~/rpmbuild/SPECS/kubernetes-cni.spec
-          fi
-
           # ---- Collect RPM names and set outputs ----
           find rpms -name '*.rpm' | sort
 
-          for pkg in kubectl kubeadm kubelet cri-tools kubernetes-cni; do
+          for pkg in kubectl kubeadm kubelet; do
             rpm_file=$(find rpms -maxdepth 1 -name "${pkg}-*.rpm" ! -name "*.src.rpm" 2>/dev/null | head -1)
             if [ -n "$rpm_file" ]; then
               rpm_name=$(basename "$rpm_file")
@@ -496,8 +417,6 @@ jobs:
       KUBECTL_DEBIAN_DEB_NAME: ${{ steps.build-debs.outputs.KUBECTL_DEBIAN_DEB_NAME }}
       KUBEADM_DEBIAN_DEB_NAME: ${{ steps.build-debs.outputs.KUBEADM_DEBIAN_DEB_NAME }}
       KUBELET_DEBIAN_DEB_NAME: ${{ steps.build-debs.outputs.KUBELET_DEBIAN_DEB_NAME }}
-      CRI_TOOLS_DEBIAN_DEB_NAME: ${{ steps.build-debs.outputs.CRI_TOOLS_DEBIAN_DEB_NAME }}
-      KUBERNETES_CNI_DEBIAN_DEB_NAME: ${{ steps.build-debs.outputs.KUBERNETES_CNI_DEBIAN_DEB_NAME }}
       DEBIAN_VERSION_CODENAME: ${{ steps.extract-version.outputs.DEBIAN_VERSION_CODENAME }}
     permissions:
       contents: read
@@ -532,44 +451,6 @@ jobs:
         with:
           name: kubernetes-loong64-binaries
           path: artifacts
-      - name: Download external binaries (cri-tools, kubernetes-cni)
-        run: |
-          mkdir -p external-binaries/${{ env.ARCH }}
-
-          # --- cri-tools (crictl) ---
-          CRI_TOOLS_MINOR=$(echo "${{ env.VERSION }}" | cut -d'.' -f2)
-          CRI_TOOLS_VERSION="1.${CRI_TOOLS_MINOR}.0"
-          echo "Attempting to download crictl v${CRI_TOOLS_VERSION} for ${{ env.ARCH }}..."
-          CRI_TOOLS_URL="https://github.com/kubernetes-loong64/cri-tools-loong64/releases/download/release-loong64-v${CRI_TOOLS_VERSION}/crictl"
-          if curl -fsSL -o external-binaries/${{ env.ARCH }}/crictl "$CRI_TOOLS_URL"; then
-            echo "Downloaded crictl from $CRI_TOOLS_URL"
-          else
-            echo "WARNING: Failed to download crictl from $CRI_TOOLS_URL"
-            echo "cri-tools DEB will be skipped. Create a cri-tools-loong64 release first."
-            touch external-binaries/${{ env.ARCH }}/.skip-cri-tools
-          fi
-          if [ ! -f external-binaries/${{ env.ARCH }}/.skip-cri-tools ]; then
-            chmod 755 external-binaries/${{ env.ARCH }}/crictl
-            file external-binaries/${{ env.ARCH }}/crictl
-          fi
-
-          # --- kubernetes-cni (CNI plugins) ---
-          KUBERNETES_CNI_VERSION="1.6.2"
-          echo "Attempting to download CNI plugins v${KUBERNETES_CNI_VERSION} for ${{ env.ARCH }}..."
-          KUBERNETES_CNI_BASE="https://github.com/kubernetes-loong64/plugins-loong64/releases/download/release-loong64-v${KUBERNETES_CNI_VERSION}"
-          CNI_DOWNLOAD_OK=true
-          for plugin in bandwidth bridge dhcp dummy firewall host-device host-local ipvlan loopback macvlan portmap ptp sbr static tap tuning vlan vrf; do
-            if ! curl -fsSL -o "external-binaries/${{ env.ARCH }}/${plugin}" "${KUBERNETES_CNI_BASE}/${plugin}"; then
-              echo "WARNING: Failed to download ${plugin}. CNI plugins package will be skipped."
-              CNI_DOWNLOAD_OK=false
-              break
-            fi
-            chmod 755 "external-binaries/${{ env.ARCH }}/${plugin}"
-          done
-          if [ "$CNI_DOWNLOAD_OK" = false ]; then
-            touch external-binaries/${{ env.ARCH }}/.skip-kubernetes-cni
-          fi
-          ls -la external-binaries/${{ env.ARCH }}/ 2>/dev/null || echo "No external binaries directory"
       - name: Build all DEBs
         id: build-debs
         run: |
@@ -665,66 +546,6 @@ jobs:
           dpkg-deb --build $PKG_ROOT debs/
           rm -rf $PKG_ROOT
 
-          # ---- cri-tools ----
-          echo "=== Building cri-tools DEB ==="
-          if [ -f external-binaries/${ARCH}/.skip-cri-tools ]; then
-            echo "Skipping cri-tools DEB (no binary available)"
-          else
-            PKG_ROOT=$(mktemp -d)
-            mkdir -p $PKG_ROOT/usr/bin
-            mkdir -p $PKG_ROOT/usr/share/doc/cri-tools
-            mkdir -p $PKG_ROOT/DEBIAN
-            install -m 755 external-binaries/${ARCH}/crictl $PKG_ROOT/usr/bin/crictl
-            install -m 644 templates/latest/cri-tools/LICENSE $PKG_ROOT/usr/share/doc/cri-tools/copyright
-            cat > $PKG_ROOT/DEBIAN/control << 'CTRLEOF'
-            Package: cri-tools
-            Version: VERSION_PLACEHOLDER
-            Architecture: ARCH_PLACEHOLDER
-            Maintainer: 徐晓伟 <xuxiaowei@xuxiaowei.com.cn>
-            Description: cri-tools (loong64)
-             cri-tools — Command-line utility for interacting with a container runtime,
-             built for the loong64 (LoongArch) architecture.
-            Homepage: https://github.com/kubernetes-loong64/kubernetes-loong64
-            Section: admin
-            Priority: optional
-          CTRLEOF
-            sed -i "s/VERSION_PLACEHOLDER/${VERSION}-${SERIAL}~${ID_VERSION_ID}~${DEBIAN_VERSION_CODENAME}/g" $PKG_ROOT/DEBIAN/control
-            sed -i "s/ARCH_PLACEHOLDER/${ARCH}/g" $PKG_ROOT/DEBIAN/control
-            dpkg-deb --build $PKG_ROOT debs/
-            rm -rf $PKG_ROOT
-          fi
-
-          # ---- kubernetes-cni ----
-          echo "=== Building kubernetes-cni DEB ==="
-          if [ -f external-binaries/${ARCH}/.skip-kubernetes-cni ]; then
-            echo "Skipping kubernetes-cni DEB (no binaries available)"
-          else
-            PKG_ROOT=$(mktemp -d)
-            mkdir -p $PKG_ROOT/opt/cni/bin
-            mkdir -p $PKG_ROOT/etc/cni/net.d
-            mkdir -p $PKG_ROOT/usr/share/doc/kubernetes-cni
-            mkdir -p $PKG_ROOT/DEBIAN
-            install -m 755 external-binaries/${ARCH}/* $PKG_ROOT/opt/cni/bin/
-            install -m 644 templates/latest/kubernetes-cni/LICENSE $PKG_ROOT/usr/share/doc/kubernetes-cni/copyright
-            touch $PKG_ROOT/etc/cni/net.d/.kubernetes-cni-keep
-            cat > $PKG_ROOT/DEBIAN/control << 'CTRLEOF'
-            Package: kubernetes-cni
-            Version: VERSION_PLACEHOLDER
-            Architecture: ARCH_PLACEHOLDER
-            Maintainer: 徐晓伟 <xuxiaowei@xuxiaowei.com.cn>
-            Description: kubernetes-cni (loong64)
-             kubernetes-cni — Binaries required to provision kubernetes container networking,
-             built for the loong64 (LoongArch) architecture.
-            Homepage: https://github.com/kubernetes-loong64/kubernetes-loong64
-            Section: net
-            Priority: optional
-          CTRLEOF
-            sed -i "s/VERSION_PLACEHOLDER/${VERSION}-${SERIAL}~${ID_VERSION_ID}~${DEBIAN_VERSION_CODENAME}/g" $PKG_ROOT/DEBIAN/control
-            sed -i "s/ARCH_PLACEHOLDER/${ARCH}/g" $PKG_ROOT/DEBIAN/control
-            dpkg-deb --build $PKG_ROOT debs/
-            rm -rf $PKG_ROOT
-          fi
-
           # ---- Rename and collect DEB names ----
           for f in debs/*.deb; do
             new_name=$(echo "$f" | tr '~' '.')
@@ -734,7 +555,7 @@ jobs:
             fi
           done
 
-          for pkg in kubectl kubeadm kubelet cri-tools kubernetes-cni; do
+          for pkg in kubectl kubeadm kubelet; do
             deb_file=$(find debs -maxdepth 1 -name "${pkg}_*" 2>/dev/null | head -1)
             if [ -n "$deb_file" ]; then
               deb_name=$(basename "$deb_file")
@@ -774,13 +595,9 @@ jobs:
       KUBECTL_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBECTL_ANOLIS_RPM_NAME }}
       KUBEADM_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBEADM_ANOLIS_RPM_NAME }}
       KUBELET_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBELET_ANOLIS_RPM_NAME }}
-      CRI_TOOLS_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.CRI_TOOLS_ANOLIS_RPM_NAME }}
-      KUBERNETES_CNI_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBERNETES_CNI_ANOLIS_RPM_NAME }}
       KUBECTL_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBECTL_DEBIAN_DEB_NAME }}
       KUBEADM_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBEADM_DEBIAN_DEB_NAME }}
       KUBELET_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBELET_DEBIAN_DEB_NAME }}
-      CRI_TOOLS_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.CRI_TOOLS_DEBIAN_DEB_NAME }}
-      KUBERNETES_CNI_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBERNETES_CNI_DEBIAN_DEB_NAME }}
     steps:
       - name: Download binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -859,41 +676,37 @@ jobs:
           cat > release-body.md <<'BODYEOF'
           ## Artifacts
           
-          | File                                        | Download                                                                                                   |
-          |---------------------------------------------|------------------------------------------------------------------------------------------------------------|
-          | `apiextensions-apiserver`                   | [apiextensions-apiserver](${{ env.BASE_URL }}/apiextensions-apiserver)                                     |
-          | `conformance-loong64.tar`                   | [conformance-loong64.tar](${{ env.BASE_URL }}/conformance-loong64.tar)                                     |
-          | `ginkgo`                                    | [ginkgo](${{ env.BASE_URL }}/ginkgo)                                                                       |
-          | `go-runner`                                 | [go-runner](${{ env.BASE_URL }}/go-runner)                                                                 |
-          | `kubeadm`                                   | [kubeadm](${{ env.BASE_URL }}/kubeadm)                                                                     |
-          | `kube-aggregator`                           | [kube-aggregator](${{ env.BASE_URL }}/kube-aggregator)                                                     |
-          | `kube-apiserver.tar`                        | [kube-apiserver.tar](${{ env.BASE_URL }}/kube-apiserver.tar)                                               |
-          | `kube-apiserver`                            | [kube-apiserver](${{ env.BASE_URL }}/kube-apiserver)                                                       |
-          | `kube-controller-manager.tar`               | [kube-controller-manager.tar](${{ env.BASE_URL }}/kube-controller-manager.tar)                             |
-          | `kube-controller-manager`                   | [kube-controller-manager](${{ env.BASE_URL }}/kube-controller-manager)                                     |
-          | `kubectl.tar`                               | [kubectl.tar](${{ env.BASE_URL }}/kubectl.tar)                                                             |
-          | `kubectl`                                   | [kubectl](${{ env.BASE_URL }}/kubectl)                                                                     |
-          | `kubectl-convert`                           | [kubectl-convert](${{ env.BASE_URL }}/kubectl-convert)                                                     |
-          | `kubelet`                                   | [kubelet](${{ env.BASE_URL }}/kubelet)                                                                     |
-          | `kube-log-runner`                           | [kube-log-runner](${{ env.BASE_URL }}/kube-log-runner)                                                     |
-          | `kubemark`                                  | [kubemark](${{ env.BASE_URL }}/kubemark)                                                                   |
-          | `kube-proxy.tar`                            | [kube-proxy.tar](${{ env.BASE_URL }}/kube-proxy.tar)                                                       |
-          | `kube-proxy`                                | [kube-proxy](${{ env.BASE_URL }}/kube-proxy)                                                               |
-          | `kube-scheduler.tar`                        | [kube-scheduler.tar](${{ env.BASE_URL }}/kube-scheduler.tar)                                               |
-          | `kube-scheduler`                            | [kube-scheduler](${{ env.BASE_URL }}/kube-scheduler)                                                       |
-          | `mounter`                                   | [mounter](${{ env.BASE_URL }}/mounter)                                                                     |
-          | `pause-loong64.tar`                         | [pause-loong64.tar](${{ env.BASE_URL }}/pause-loong64.tar)                                                 |
-          | `${{ env.KUBECTL_ANOLIS_RPM_NAME }}`        | [${{ env.KUBECTL_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_ANOLIS_RPM_NAME }})               |
-          | `${{ env.KUBEADM_ANOLIS_RPM_NAME }}`        | [${{ env.KUBEADM_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBEADM_ANOLIS_RPM_NAME }})               |
-          | `${{ env.KUBELET_ANOLIS_RPM_NAME }}`        | [${{ env.KUBELET_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBELET_ANOLIS_RPM_NAME }})               |
-          | `${{ env.CRI_TOOLS_ANOLIS_RPM_NAME }}`      | [${{ env.CRI_TOOLS_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.CRI_TOOLS_ANOLIS_RPM_NAME }})           |
-          | `${{ env.KUBERNETES_CNI_ANOLIS_RPM_NAME }}` | [${{ env.KUBERNETES_CNI_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_ANOLIS_RPM_NAME }}) |
-          | `${{ env.KUBECTL_DEBIAN_DEB_NAME }}`        | [${{ env.KUBECTL_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }})               |
-          | `${{ env.KUBEADM_DEBIAN_DEB_NAME }}`        | [${{ env.KUBEADM_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBEADM_DEBIAN_DEB_NAME }})               |
-          | `${{ env.KUBELET_DEBIAN_DEB_NAME }}`        | [${{ env.KUBELET_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBELET_DEBIAN_DEB_NAME }})               |
-          | `${{ env.CRI_TOOLS_DEBIAN_DEB_NAME }}`      | [${{ env.CRI_TOOLS_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.CRI_TOOLS_DEBIAN_DEB_NAME }})           |
-          | `${{ env.KUBERNETES_CNI_DEBIAN_DEB_NAME }}` | [${{ env.KUBERNETES_CNI_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_DEBIAN_DEB_NAME }}) |
-
+          | File                                 | Download                                                                                     |
+          |--------------------------------------|----------------------------------------------------------------------------------------------|
+          | `apiextensions-apiserver`            | [apiextensions-apiserver](${{ env.BASE_URL }}/apiextensions-apiserver)                       |
+          | `conformance-loong64.tar`            | [conformance-loong64.tar](${{ env.BASE_URL }}/conformance-loong64.tar)                       |
+          | `ginkgo`                             | [ginkgo](${{ env.BASE_URL }}/ginkgo)                                                         |
+          | `go-runner`                          | [go-runner](${{ env.BASE_URL }}/go-runner)                                                   |
+          | `kubeadm`                            | [kubeadm](${{ env.BASE_URL }}/kubeadm)                                                       |
+          | `kube-aggregator`                    | [kube-aggregator](${{ env.BASE_URL }}/kube-aggregator)                                       |
+          | `kube-apiserver.tar`                 | [kube-apiserver.tar](${{ env.BASE_URL }}/kube-apiserver.tar)                                 |
+          | `kube-apiserver`                     | [kube-apiserver](${{ env.BASE_URL }}/kube-apiserver)                                         |
+          | `kube-controller-manager.tar`        | [kube-controller-manager.tar](${{ env.BASE_URL }}/kube-controller-manager.tar)               |
+          | `kube-controller-manager`            | [kube-controller-manager](${{ env.BASE_URL }}/kube-controller-manager)                       |
+          | `kubectl.tar`                        | [kubectl.tar](${{ env.BASE_URL }}/kubectl.tar)                                               |
+          | `kubectl`                            | [kubectl](${{ env.BASE_URL }}/kubectl)                                                       |
+          | `kubectl-convert`                    | [kubectl-convert](${{ env.BASE_URL }}/kubectl-convert)                                       |
+          | `kubelet`                            | [kubelet](${{ env.BASE_URL }}/kubelet)                                                       |
+          | `kube-log-runner`                    | [kube-log-runner](${{ env.BASE_URL }}/kube-log-runner)                                       |
+          | `kubemark`                           | [kubemark](${{ env.BASE_URL }}/kubemark)                                                     |
+          | `kube-proxy.tar`                     | [kube-proxy.tar](${{ env.BASE_URL }}/kube-proxy.tar)                                         |
+          | `kube-proxy`                         | [kube-proxy](${{ env.BASE_URL }}/kube-proxy)                                                 |
+          | `kube-scheduler.tar`                 | [kube-scheduler.tar](${{ env.BASE_URL }}/kube-scheduler.tar)                                 |
+          | `kube-scheduler`                     | [kube-scheduler](${{ env.BASE_URL }}/kube-scheduler)                                         |
+          | `mounter`                            | [mounter](${{ env.BASE_URL }}/mounter)                                                       |
+          | `pause-loong64.tar`                  | [pause-loong64.tar](${{ env.BASE_URL }}/pause-loong64.tar)                                   |
+          | `${{ env.KUBECTL_ANOLIS_RPM_NAME }}` | [${{ env.KUBECTL_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_ANOLIS_RPM_NAME }}) |
+          | `${{ env.KUBEADM_ANOLIS_RPM_NAME }}` | [${{ env.KUBEADM_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBEADM_ANOLIS_RPM_NAME }}) |
+          | `${{ env.KUBELET_ANOLIS_RPM_NAME }}` | [${{ env.KUBELET_ANOLIS_RPM_NAME }}](${{ env.BASE_URL }}/${{ env.KUBELET_ANOLIS_RPM_NAME }}) |
+          | `${{ env.KUBECTL_DEBIAN_DEB_NAME }}` | [${{ env.KUBECTL_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }}) |
+          | `${{ env.KUBEADM_DEBIAN_DEB_NAME }}` | [${{ env.KUBEADM_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBEADM_DEBIAN_DEB_NAME }}) |
+          | `${{ env.KUBELET_DEBIAN_DEB_NAME }}` | [${{ env.KUBELET_DEBIAN_DEB_NAME }}](${{ env.BASE_URL }}/${{ env.KUBELET_DEBIAN_DEB_NAME }}) |
+          
           Each file has a corresponding `.asc` detached GPG signature.
 
           ```shell
@@ -982,10 +795,6 @@ jobs:
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBEADM_ANOLIS_RPM_NAME }}.asc
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBELET_ANOLIS_RPM_NAME }}
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBELET_ANOLIS_RPM_NAME }}.asc
-          curl -LO ${{ env.BASE_URL }}/${{ env.CRI_TOOLS_ANOLIS_RPM_NAME }}
-          curl -LO ${{ env.BASE_URL }}/${{ env.CRI_TOOLS_ANOLIS_RPM_NAME }}.asc
-          curl -LO ${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_ANOLIS_RPM_NAME }}
-          curl -LO ${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_ANOLIS_RPM_NAME }}.asc
 
           # DEB (Debian)
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBECTL_DEBIAN_DEB_NAME }}
@@ -994,10 +803,6 @@ jobs:
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBEADM_DEBIAN_DEB_NAME }}.asc
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBELET_DEBIAN_DEB_NAME }}
           curl -LO ${{ env.BASE_URL }}/${{ env.KUBELET_DEBIAN_DEB_NAME }}.asc
-          curl -LO ${{ env.BASE_URL }}/${{ env.CRI_TOOLS_DEBIAN_DEB_NAME }}
-          curl -LO ${{ env.BASE_URL }}/${{ env.CRI_TOOLS_DEBIAN_DEB_NAME }}.asc
-          curl -LO ${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_DEBIAN_DEB_NAME }}
-          curl -LO ${{ env.BASE_URL }}/${{ env.KUBERNETES_CNI_DEBIAN_DEB_NAME }}.asc
 
           ctr -n k8s.io i ls -q | grep '^sha256'
           
@@ -1044,7 +849,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        package: [kubectl, kubeadm, kubelet, cri-tools, kubernetes-cni]
+        package: [kubectl, kubeadm, kubelet]
     permissions:
       contents: read
     env:
@@ -1056,13 +861,9 @@ jobs:
       KUBECTL_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBECTL_ANOLIS_RPM_NAME }}
       KUBEADM_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBEADM_ANOLIS_RPM_NAME }}
       KUBELET_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBELET_ANOLIS_RPM_NAME }}
-      CRI_TOOLS_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.CRI_TOOLS_ANOLIS_RPM_NAME }}
-      KUBERNETES_CNI_ANOLIS_RPM_NAME: ${{ needs.rpm-anolis.outputs.KUBERNETES_CNI_ANOLIS_RPM_NAME }}
       KUBECTL_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBECTL_DEBIAN_DEB_NAME }}
       KUBEADM_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBEADM_DEBIAN_DEB_NAME }}
       KUBELET_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBELET_DEBIAN_DEB_NAME }}
-      CRI_TOOLS_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.CRI_TOOLS_DEBIAN_DEB_NAME }}
-      KUBERNETES_CNI_DEBIAN_DEB_NAME: ${{ needs.deb-debian.outputs.KUBERNETES_CNI_DEBIAN_DEB_NAME }}
       GITLAB_API_URL: ${{ vars.GITLAB_API_URL || 'https://gitlab.xuxiaowei.com.cn' }}
       GITLAB_PROJECT_ID: ${{ vars.GITLAB_PROJECT_ID || '590' }}
       GITLAB_REF: ${{ vars.GITLAB_REF || 'sync' }}
