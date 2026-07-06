@@ -687,7 +687,7 @@ jobs:
             Homepage: https://github.com/kubernetes-loong64/kubernetes-loong64
             Section: admin
             Priority: optional
-            CTRLEOF
+          CTRLEOF
             sed -i "s/VERSION_PLACEHOLDER/${VERSION}-${SERIAL}~${ID_VERSION_ID}~${DEBIAN_VERSION_CODENAME}/g" $PKG_ROOT/DEBIAN/control
             sed -i "s/ARCH_PLACEHOLDER/${ARCH}/g" $PKG_ROOT/DEBIAN/control
             dpkg-deb --build $PKG_ROOT debs/
@@ -718,7 +718,7 @@ jobs:
             Homepage: https://github.com/kubernetes-loong64/kubernetes-loong64
             Section: net
             Priority: optional
-            CTRLEOF
+          CTRLEOF
             sed -i "s/VERSION_PLACEHOLDER/${VERSION}-${SERIAL}~${ID_VERSION_ID}~${DEBIAN_VERSION_CODENAME}/g" $PKG_ROOT/DEBIAN/control
             sed -i "s/ARCH_PLACEHOLDER/${ARCH}/g" $PKG_ROOT/DEBIAN/control
             dpkg-deb --build $PKG_ROOT debs/
